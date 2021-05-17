@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+
+source ${HOME}/.bashmatic/init.sh
+source ${HOME}/.bash_pu_colors
+
+function db-export.usage() {
+  # shellcheck disable=SC2059
+  printf " \
+${bldgrn}USAGE: 
+  ${bldylw}
+      db-export [ -d/--delimiter delimiter ] 
+                [ -r/--rows           ROWS ] 
+                [ -q/--query         QUERY ]
+                [ -o/--output         FILE ] 
+                [ -H/--header              ]
+                [ -l/--licenses            ]
+                [ -v/--verbose             ]
+
+${bldgrn}DESCRIPTION:${clr}
+      Exports a given query in a delimited format suitable for 
+      future reimporting.
+      
+${bldgrn}EXAMPLE${clr}
+      ${bldblu}$ db-export -d ',' -r 1000 -H -v -q 'select * from files'
+
+"   
+  exit 0
+}
+
+export dbe_delimiter=","
+export dbe_rows=1000
+export dbe_licenses=0
+export dbe_header=0
+export dbe_output=output.csv
+export dbe_query=
+export dbe_statement=
+export dbe_verbose=0
+
+function db-export.parse() {
+ [[ -z "$1" ]] && {
+    db-export.usage
+    exit 0
+  }
+
+  # Parse additional flags
+  while :; do
+    case $1 in
+    -d | --delimiter)
+      shift
+      export dbe_delimiter="$1"; shift
+      ;;
+    -o | --output)
+      shift
+      export dbe_output="$1"; shift
+      ;;
+    -v | --verbose)
+      shift
+      export dbe_verbose=1
+      ;;
+    -H | --header)
+      shift
+    export dbe_header=1
+      ;;
+    -r | --rows)
+      shift
+      export dbe_rows="$1"; shift
+      ;;
+    -l | --licenses)
+      shift
+      export dbe_licenses=1
+      ;;
+    -q | --query)
+      shift
+      export dbe_query="$1"; shift
+      ;;
+    --) # End of all options; anything after will be passed to the action function
+      shift
+      break
+      ;;
+    -?*)
+      printf 'WARN: Unknown option (ignored): %s\n' "$1" >&2
+      exit 127
+      shift
+      ;;
+    *)
+      [[ -z "$1" ]] && break
+      shift
+      ;;
+    esac
+  done
+
+  ((dbe_rows)) && dbe_query="${dbe_query} limit ${dbe_rows}"
+
+  dbe_statement="\copy ("
+  ((dbe_verbose)) && run.inspect-variables-that-are starting-with dbe_
+}
+
+db-export.parse "$@"
+
+
+# db run prod.filestore '\copy files(component_id::text, file_path::text, fingerprint_sha_256::text, fingerprint_comment_stripped_sha_256::text, license_info::jsonb) to 
+

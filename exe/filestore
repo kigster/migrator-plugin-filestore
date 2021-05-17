@@ -1,0 +1,15 @@
+#!/usr/bin/env ruby -W0
+# vim: ft=ruby
+# frozen_string_literal: true
+ENV["RUBYOPT"] = "W0"
+
+require "colored2"
+
+slib_path = File.expand_path("../lib", __dir__)
+$LOAD_PATH << lib_path if File.exist?(lib_path)
+
+require "migrator/plugin/file_store"
+require "migrator/plugin/file_store/launcher"
+
+Migrator::Plugin::FileStore::Launcher.new(ARGV.dup).migrate
+

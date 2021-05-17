@@ -1,0 +1,9 @@
+= Migrator Filestore Plugin
+:doctype: book
+:toc:
+:toclevels: 4
+:sectnums:
+
+
+This is an attempt to separate the concerns of performing a long running migration and tracking its progress, from the actual record reading and transforming.
+

@@ -1,0 +1,200 @@
+#!/usr/bin/env bash
+
+[[ -z "${BASHMATIC_HOME}" || ! -d ${BASHMATIC_HOME} ]] && {
+    bash -c "$(curl -fsSL https://bashmatic.re1.re); bashmatic-install -v"
+}
+
+export BASHMATIC_HOME=${BASHMATIC_HOME:-"${HOME}/.bashmatic"}
+
+[[ -s "${BASHMATIC_HOME}/init.sh" ]] || {
+  echo "Unable to find BashMatic after installation?"
+  exit 1
+}
+
+# shellcheck source=${HOME}/.bashmatic/init.sh
+source "${BASHMATIC_HOME}/init.sh"
+output.constrain-screen-width 100
+
+export EXPECTED_FILE_COUNT=1000000
+
+export RAILS_ROOT="$(pwd -P)"
+export FIXTURE_DIR="${RAILS_ROOT}/spec/fixtures/files"
+
+export FILES_BACKUP="${FIXTURE_DIR}/files-1M.dump.gz"
+export RAILS_ENV="${RAILS_ENV:-"development"}"
+
+h4bg "Rapid FILES importer/exporter script, v0.0.1"
+
+function rails-env() {
+  echo ${RAILS_ENV:-"development"}
+}
+
+function connection-parameter() {
+  local parameter="${1:-"database"}"
+  ruby -e "require 'yaml'; require 'erb'; puts YAML.load(ERB.new(File.read('config/database.yml')).result)['$(rails-env)']['${parameter}'].to_s"
+}
+
+function connection-setup() {
+  export PGPASSWORD="$(connection-parameter password)"
+  export PGUSER="$(connection-parameter username)"
+  export PGPORT="$(connection-parameter port)"
+  export PGHOST="$(connection-parameter host)"
+  export PGDATABASE="$(connection-parameter database)"
+  export target_database="${PGDATABASE}"
+
+  is-dbg && {
+    run.inspect-variables-that-are starting-with PG
+    hr; echo
+  }
+
+  inf "Testing DB Connection to ${bldylw}${target_database}..."
+  pg_isready >/dev/null || {
+    not-ok:
+    error "pg_isready reported an error, and an exit code $?"
+    exit 1
+  }
+
+  printf "${bldgrn} [✔] "; ok:
+
+  export psql_command="psql -h ${PGHOST} -U ${PGUSER} -d ${PGDATABASE} -v ON_ERROR_STOP=1 -XAt "
+}
+
+function current-file-count() {
+  local psql_command="$1"
+  local query='select count(*) from files'
+  is-dbg && debug "${psql_command} -c '${query}'" >&2
+  inf "Executing SQL Query: ${bldylw}${query}${clr} -> " >&2
+  local count="$(${psql_command} -c "${query}")"
+  printf "${bldwht}${count}" >&2
+  ok: >&2
+  echo ${count}
+}
+
+# Keeping this function in case we need to export again.
+function backup-export() {
+  local backup="${1:-${FILES_BACKUP}}"
+  run.set-all abort-on-error
+  h2bg "Exporting → " "${bldwht}${backup}"
+  run "pg_dump -t files -d ${source} -f \"${backup}\""
+  run "gzip --best \"${backup}\""
+  backup="${backup}.gz"
+}
+
+function backup-import() {
+  local backup="${1:-${FILES_BACKUP}}"
+  run.set-all abort-on-error
+  [[ -n ${DEBUG} ]] && run.set-all show-output-on
+
+  [[ ${PGHOST} =~ \. ]] && {
+    error "PGHOST can not be a remote host, aborting! PGHOST=${PGHOST}"
+    exit 1
+  }
+
+  h3bg "Importing $(basename ${backup}) into" "${bldwht}${target_database}"
+  run "echo 'truncate files' | ${psql_command} - ${target_database}"
+
+  local drop="${FIXTURE_DIR}/files-indexes-drop.sql"
+  local create="${FIXTURE_DIR}/files-indexes-create.sql"
+
+  if [[ -f "${drop}" && -f "${create}" ]]; then
+    arrow.blk-on-ylw "Dropping indexes..."
+    run "${psql_command} -f ${drop} ${target_database}"
+  fi
+
+  arrow.blk-on-ylw "Importing data..."
+  if [[ "${backup}" =~ .gz$ ]]; then
+    run "gunzip -c ${backup}| ${psql_command} - ${target_database}"
+  else
+    run "${psql_command} ${target_database}<${backup}"
+  fi
+
+  if [[ -f "${drop}" && -f "${create}" ]]; then
+    arrow.blk-on-ylw "Creating indexes..."
+    run "${psql_command} -f ${create} ${target_database}"
+  fi
+
+  arrow.blk-on-ylw "Analyzing FILES..."
+  run "echo 'analyze verbose FILES' | ${psql_command} - ${target_database}"
+  return 0
+}
+
+
+function backup-truncate() {
+  arrow.blk-on-ylw "Truncating table FILES..."
+  run "echo 'truncate files' | ${psql_command} - ${target_database}"
+}
+
+
+function main() {
+  local action="${1}"
+  [[ -z ${action} ]] && {
+    printf "
+${bldylw}USAGE:${clr}
+    ${bldgrn}$(basename $0) [ import | export | truncate ]${clr}
+
+
+${bldylw}DESCRIPTION:${clr}
+    This script quickly imports 1M records from a GZ-zipped fixture
+    file. It can also export it, as well as truncate the local FILES
+    table to prepare it for reimport.
+
+    NOTE: the script uses file ${bldblu}config/database.yml${clr} for DB
+    connection parameters. Make sure you set fields 'hostname', 'port', and
+    'username' to valid values on your local system.
+\n"
+    return 0
+  }
+
+  local func="backup-${action}"
+
+  is.a-function "${func}" || {
+    error "Action ${action} is not supported." "Only supporting either ${bldylw}export, truncate," "or ${bldylw} import."
+    return 1
+  }
+
+  connection-setup
+
+  h1 "Preparing for ${action^} of ${EXPECTED_FILE_COUNT} records" \
+     "to/from FILES table, for DB=${target_database} & RAILS_ENV=${RAILS_ENV}"
+
+  if [[ ${action} == "truncate" ]]; then
+    backup-truncate
+    exit ${LibRun__LastExitCode}
+  fi
+
+  set -eo pipefail
+  local files_count="$(current-file-count "${psql_command}")"
+  [[ -z "${files_count}" ]] && {
+    error "Unable to get the count of rows in the FILES table." \
+      "Perhaps first you need to run ${bldgrn}bundle exec rake db:reset?"
+    return 1
+  }
+
+  if [[ ${files_count} -eq ${EXPECTED_FILE_COUNT} && ${action} == "import" ]] ; then
+    success "Files table already contains ${files_count} records, all done."
+    info: "To force reimport, manually truncate the table first."
+    echo
+    return 0
+  elif [[ ${files_count} -eq 0 && ${action} == "import" ]]; then
+    info "Files table is empty, going to import from the backup file."
+  elif [[ ${files_count} -gt 0  && ${action} == "export" ]]; then
+    info "Files table has ${files_count} files, going to export last ${EXPECTED_FILE_COUNT} rows .."
+  else
+    warning "Files table already contains ${files_count} rows." \
+     "If you want to re-import, please truncate FILES table first."
+    return 1
+  fi
+
+  # start the timer
+  time.with-duration.start ${action}
+
+  eval "${func}"
+  local code=$?
+  local duration=$(time.with-duration ${action})
+  ((code)) && error "Issues during the ${action}, duration: ${bldylw}${duration}"
+  ((code)) || success "Successfully ${action}ed, duration: ${bldylw}${duration}"
+
+  return ${code}
+}
+
+[[ $0 == ${BASH_SOURCE[0]} ]] && main "$@"
