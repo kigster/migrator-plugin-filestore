@@ -12,7 +12,7 @@ jobs:
     # Containers must run in Linux based operating systems
     runs-on: ubuntu-latest
     # Docker Hub image that `container-job` executes in
-    container: postgresql:16
+    container: postgres:16
 
     # Service containers to run with `container-job`
     services:
