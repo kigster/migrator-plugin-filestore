@@ -8,18 +8,40 @@ on:
 
 jobs:
   build:
-
     runs-on: ubuntu-latest
-
+    services:
+      postgres:
+        image: postgres
+        ports:
+          - 5432:5432
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: --health-cmd pg_isready --health-interval 10s --health-timeout 5s --health-retries 5
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+        options: --entrypoint redis-server
     steps:
-    - uses: actions/checkout@v2
-    - name: Set up Ruby 2.6
-      uses: actions/setup-ruby@v1
-      with:
-        ruby-version: 2.6.x
-    - name: Run Tests
-      run: |
-        gem install bundler
-        bundle install --jobs 4 --retry 3
-        RUBYOPT=-W0 bundle exec rspec
-        RUBYOPT=-W0 bundle exec rubocop
+      - uses: actions/checkout@v4
+      - name: Set up Ruby 3.2.1
+        uses: ruby/setup-ruby@ec02537da5712d66d4d50a0f33b7eb52773b5ed1
+        with:
+          ruby-version: 3.2.1
+          bundle-cache: true
+      - name: Run RSpecs
+        run: |
+          bundle exec rspec
+        env:
+          # The hostname used to communicate with the PostgreSQL service container
+          POSTGRES_HOST: postgres
+          # The default PostgreSQL port
+          POSTGRES_PORT: 5432
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          RUBYOPT: "-W0"
+      - name: rubocop
+        run: |
+          RUBYOPT=-W0 bundle exec rubocop
+          
